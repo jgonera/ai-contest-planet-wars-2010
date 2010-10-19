@@ -19,7 +19,7 @@ class MyBot(BaseBot):
 
 	def do_turn(self):
 		max_sources = min(10, max(3, len(self.universe.my_planets)/2))
-		min_ship_count = len(self.universe.enemy_planets)**2
+		min_ship_count = len(self.universe.enemy_planets)*2
 		
 		# defend
 		remaining_attacks = min(3, len(self.universe.my_planets))
