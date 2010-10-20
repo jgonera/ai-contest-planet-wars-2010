@@ -1,4 +1,5 @@
 import logging
+from math import sqrt
 
 from planetwars import BaseBot, Game
 from planetwars.universe2 import Universe2
@@ -12,13 +13,16 @@ log.setLevel(logging.DEBUG)
 class MyBot(BaseBot):
 
 	def do_turn(self):
-		available_ships = 0
-		longest_distance = 0
+#		for target in self.universe.best_targets():
+#			log.debug(target.target_coefficient())
 		
-		log.debug(self.universe.best_targets())
-		
-		for target in self.universe.best_targets():
+		#TODO: DRY!!! check if defense is correct
+		# defend
+		for target in self.universe.my_planets:
+			available_ships = 0
+			longest_distance = 0
 			best_sources = target.best_sources()
+			
 			for source in best_sources:
 				if source.ship_count > source.safe_ship_count:
 					available_ships += source.ship_count - source.safe_ship_count
@@ -28,16 +32,48 @@ class MyBot(BaseBot):
 			target_in_future = target.in_future(longest_distance)
 			if target_in_future.owner == player.ME:
 				continue
-			if available_ships < target_in_future.ship_count + 1:
-				break
+			if available_ships < target_in_future.ship_count:
+				continue
 			
 			for source in best_sources:
 				target_in_future = target.in_future(longest_distance)
 				if source.ship_count > source.safe_ship_count and (not target_in_future.owner == player.ME):
-					source.send_fleet(target, min(source.ship_count - source.safe_ship_count, target_in_future.ship_count + 1))
+#					log.debug(source.id)
+#					log.debug(source.safe_ship_count)
+					source.send_fleet(target, min(source.ship_count - source.safe_ship_count, target_in_future.ship_count + target_in_future.min_ship_count))
+		
+		# attack
+		for target in self.universe.best_targets():
+			available_ships = 0
+			longest_distance = 0
+			best_sources = target.best_sources()
+			
+			for source in best_sources:
+				if source.ship_count > source.safe_ship_count + source.min_ship_count:
+					available_ships += source.ship_count - source.safe_ship_count - source.min_ship_count
+					if source.distance(target) > longest_distance:
+						longest_distance = source.distance(target)
+		
+			target_in_future = target.in_future(longest_distance)
+			if target_in_future.owner == player.ME:
+				continue
+			if available_ships < target_in_future.ship_count + target_in_future.min_ship_count:
+				break
+			
+			for source in best_sources:
+				target_in_future = target.in_future(longest_distance)
+				if source.ship_count > source.safe_ship_count + source.min_ship_count and (not target_in_future.owner == player.ME):
+#					log.debug(source.id)
+#					log.debug(source.safe_ship_count)
+					source.send_fleet(target, min(source.ship_count - source.safe_ship_count - source.min_ship_count, target_in_future.ship_count + target_in_future.min_ship_count))
 
 
 class MyPlanet(Planet2):
+	
+	@property
+	def min_ship_count(self):
+		#TODO: works only for my ships, change it? if not my planet return 0?
+		return len(self.universe.enemy_planets) * 2
 	
 	@property
 	def safe_ship_count(self):
@@ -63,7 +99,7 @@ class MyPlanet(Planet2):
 #		return value
 		
 		enemy_fleets = sorted(
-			self.universe.find_fleets(owner=enemy),
+			self.universe.find_fleets(owner=enemy, destination=self),
 			reverse=True,
 			key=lambda fleet: fleet.turns_remaining
 		)
@@ -92,7 +128,7 @@ class MyPlanet(Planet2):
 			planets,
 			reverse=True,
 			key=lambda source: (
-				1.0 * (source.ship_count > source.safe_ship_count)
+				1.0 * (source.ship_count > source.safe_ship_count or owner != player.ME) # lets assume enemy doesn't check this
 				* source.ship_count
 				/ float(source.distance(self))
 			)
@@ -101,7 +137,7 @@ class MyPlanet(Planet2):
 	def sources_coefficient(self, owner=player.ME):
 		value = 0
 		for source in self.best_sources(owner=owner)[0:3]:
-			value += float(source.ship_count+1.0) / float(source.distance(self))**2 / float(self.in_future(source.distance(self)).ship_count+1.0)**2
+			value += float(source.ship_count+1.0) / float(source.distance(self)) / float(self.in_future(source.distance(self)).ship_count+1.0)**2
 		value /= 3.0
 #		log.debug(owner)
 #		log.debug(self.best_sources(owner=owner))
@@ -120,11 +156,15 @@ class MyPlanet(Planet2):
 			enemy = player.ME
 		
 		value = self.sources_coefficient(owner=attacker)
-#		value *= 1.0 / self.sources_coefficient(owner=enemy)
+		value -= self.sources_coefficient(owner=enemy)
+		value /= self.ship_count
 		value *= float(self.growth_rate)
 
+		#TODO: this works only for player.ME
 		if self.owner != player.NOBODY:
 			value *= (float(len(self.universe.my_planets)) / float(len(self.universe.enemy_planets))) ** 2
+		
+		return value
 
 
 class MyUniverse(Universe2):
