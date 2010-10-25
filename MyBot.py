@@ -17,6 +17,7 @@ class MyBot(BaseBot):
 	first_turn = True
 	
 	def do_turn(self):
+		# TODO: count how many we can send on the first attack
 #		if self.first_turn:
 #			self.first_turn = False
 #			return
@@ -81,17 +82,17 @@ class MyBot(BaseBot):
 	def attack(self):
 		log.info("ATTACK")
 		for target in self.universe.best_targets():
-#			if not (self.universe.my_growth_rate() <= 1.5 * self.universe.enemy_growth_rate() or
-#			        self.universe.my_ship_count() >= self.universe.enemy_ship_count()):
-#				break
+			if not (self.universe.my_growth_rate() <= 1.1 * self.universe.enemy_growth_rate() or
+			        self.universe.my_ship_count() >= self.universe.enemy_ship_count()):
+				break
 			   
 			log.info("Ships needed for {0}: {1}".format(target, target.needed_ship_count()))
-			if target.needed_ship_count() <= 0:
-				continue
-				
 			available_ships = 0
 			longest_distance = 0
 			best_sources = target.best_sources()
+
+			if target.needed_ship_count() <= 0 or len(best_sources) == 0:
+				continue
 			
 			for source in best_sources:
 				available_ships += source.available_ship_count()
@@ -101,8 +102,7 @@ class MyBot(BaseBot):
 					break
 
 			if available_ships < needed_ship_count:
-				#break
-				continue
+				break
 			
 			log.info("Attacking %s, %i ships needed." % (target, needed_ship_count))
 			self.universe.begin_transaction()
@@ -156,8 +156,13 @@ class MyPlanet(Planet):
 		"""The number of ships the planet can send without risk."""
 		if self.owner != player.ME:
 			raise Exception("Should be run only on my planets!")
-			
-		return max(0, min(self.ship_count, -self.needed_ship_count(turns)))
+#		
+#		if self.id == 13:
+#			log.debug(self)
+#			log.debug(self.ship_count)
+#			log.debug(-self.needed_ship_count(turns))
+		return self.ship_count - self.safe_ship_count(turns)
+		
 	
 	@cache.memoize
 	def needed_ship_count(self, turns=0):
@@ -184,11 +189,62 @@ class MyPlanet(Planet):
 		
 		in_future = self.in_future(turns)
 		if in_future.owner == player.ME:
-			return -in_future.ship_count + 1
+			return -in_future.ship_count
 		else:
 			return in_future.ship_count + 1
 			
-	
+			
+	@cache.memoize
+	def safe_ship_count(self, turns=0):
+		"""The number of additional (to ship_count) ships needed so that the planet stays mine."""
+		fleets = sorted(
+			self.universe.find_fleets(destination=self),
+			reverse=True,
+			key=lambda fleet: fleet.turns_remaining
+		)
+		
+		qfleets = sorted(
+			[ qfleet for qfleet in self.universe.fleet_queue if qfleet['destination'] == self ],
+			reverse=True,
+			key=lambda qfleet: qfleet['turns_remaining']
+		)
+		
+		if len(fleets) != 0:
+			turns = max(turns, fleets[0].turns_remaining)
+		if len(qfleets) != 0:
+			turns = max(turns, qfleets[0]['turns_remaining'])
+		
+		value = 0
+		total = 0
+		
+		for i in range(1, turns+1):
+			arriving_fleets = [ x for x in fleets if x.turns_remaining == i ]
+			
+			in_future = self.in_future(i)
+			
+			if in_future.owner == player.ME:
+				current = -self.growth_rate
+			elif in_future.owner == player.NOBODY:
+				current = 0
+			else:
+				current = self.growth_rate
+				
+			for fleet in arriving_fleets:
+				if fleet.owner == player.ME:
+					current -= fleet.ship_count
+				else:
+					current += fleet.ship_count
+			
+			current -= sum([ qfleet['ship_count'] for qfleet in qfleets if qfleet['turns_remaining'] == i ])
+			
+			total += current
+			value = max(value, total)
+		
+#		log.debug(self)
+#		log.debug(value)
+		return value
+		
+
 	@cache.memoize
 	def in_future(self, turns=1):
 		"""Calculates state of planet in `turns' turns."""
@@ -250,32 +306,29 @@ class MyPlanet(Planet):
 			key=lambda source: float(source.distance(self))
 		)
 	
-	def sources_coefficient(self, owner=player.ME):
+	def average_source_distance(self, owner=player.ME):
 		value = 0
 		best_sources = self.best_sources(owner=owner)[0:3]
 		for source in best_sources:
-			distance = source.distance(self)
-			value += 1.0 / float(distance + 1.0) #/ float(self.safe_ship_count(distance)+1.0)
+			value += source.distance(self)
 		value /= float(max(1, len(best_sources)))
-#		log.debug(owner)
-#		log.debug(self.best_sources(owner=owner))
-#		log.debug(self.id)
-#		log.debug(value)
+		#log.debug("sc {0} / {1}: {2}".format(self, owner, value))
 		
 		return value
 	
 	def target_coefficient(self):
 #		log.debug("target coefficient of %s" % self)
-#		log.debug(self.sources_coefficient(owner=attacker))
-#		log.debug(self.sources_coefficient(owner=enemy))
-#		log.debug(self.ship_count)
-#		log.debug(self.safe_ship_count())
+#		log.debug(self.average_source_distance() + 1.0)
+#		log.debug(self.average_source_distance(owner=player.ENEMIES) + 1.0)
+#		log.debug(float(max(1.0, self.needed_ship_count(int(self.average_source_distance())))))
 #		log.debug(self.growth_rate)
 		
-		value = self.sources_coefficient() + 1.0
-		value /= self.sources_coefficient(owner=player.ENEMIES) + 1.0
-		#value /= float(max(1.0, self.needed_ship_count()))
+		value = 1.0
+		value /= self.average_source_distance() + 1.0
+		value *= self.average_source_distance(owner=player.ENEMIES) + 1.0
+		value /= float(max(1.0, self.needed_ship_count(int(self.average_source_distance()))))
 		
+		# TODO: this is probably crap, invent better way to support attacks
 		if hasattr(self, 'attacked'):
 			value *= 10 - self.attacked
 			self.attacked += 1
@@ -284,7 +337,7 @@ class MyPlanet(Planet):
 		
 		if self.owner == player.NOBODY:
 			value *= float(self.growth_rate)
-			value /= float(self.ship_count + 1.0)
+			#value /= float(self.ship_count + 1.0)
 
 		if self.owner != player.NOBODY:
 			value *= float(self.universe.my_ship_count()) / float(self.universe.enemy_ship_count())
@@ -294,6 +347,7 @@ class MyPlanet(Planet):
 #				self.universe.my_growth_rate() > self.universe.enemy_growth_rate()
 #			)
 		
+#		log.debug(value)
 		return value
 	
 	def set_attacked(self):
@@ -303,8 +357,8 @@ class MyPlanet(Planet):
 	def is_front(self):
 		log.debug(self)
 		log.debug(self.universe.front_average())
-		log.debug(self.sources_coefficient(player.ENEMIES))
-		return self.sources_coefficient(player.ENEMIES) > self.universe.front_average()
+		log.debug(self.average_source_distance(player.ENEMIES))
+		return self.average_source_distance(player.ENEMIES) < self.universe.front_average()
 	
 	def queue_fleet(self, target, ship_count):
 		if isinstance(target, set):
@@ -339,7 +393,7 @@ class MyUniverse(Universe):
 	
 	@cache.memoize
 	def front_average(self):
-		return sum([ planet.sources_coefficient(owner=player.ENEMIES) for planet in self.my_planets ])/len(self.my_planets)
+		return sum([ planet.average_source_distance(owner=player.ENEMIES) for planet in self.my_planets ])/len(self.my_planets)
 	
 	#@cache.memoize
 	def best_targets(self):
@@ -347,7 +401,7 @@ class MyUniverse(Universe):
 			self.not_my_planets,
 			reverse=True,
 			key=lambda planet: (
-				planet.sources_coefficient(player.ME) >= planet.sources_coefficient(player.ENEMIES),
+				1.0 * (planet.average_source_distance(player.ME) <= planet.average_source_distance(player.ENEMIES)),
 				planet.target_coefficient()
 			)
 		)
