@@ -1,11 +1,12 @@
 import logging
-from math import sqrt
-
+from copy import copy
 
 from planetwars import BaseBot, Game
-from planetwars.universe2 import Universe2
-from planetwars.planet2 import Planet2
-from planetwars.universe import player
+from planetwars.universe2 import Universe
+from planetwars.planet2 import Planet
+from planetwars import player
+
+from mybot import cache
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
@@ -19,16 +20,21 @@ class MyBot(BaseBot):
 #		if self.first_turn:
 #			self.first_turn = False
 #			return
+
+		cache.store.clear()
 		
-		log.debug("DEFEND")
+		log.info("DEFEND")
 		# TODO: sort planets (probably by growth)
 		for planet in self.universe.my_planets:
-			attacking_fleets = planet.attacking_fleets
+			attacking_fleets = sorted(
+				planet.attacking_fleets,
+				key=lambda fleet: fleet.turns_remaining
+			)
 			safe_ship_count = planet.safe_ship_count()
 			
 			if len(attacking_fleets) != 0 and planet.ship_count < safe_ship_count:
-				log.debug("%s attacked by: %s" % (planet, attacking_fleets))
-				log.debug("Safe ship count: %s" % safe_ship_count)
+				log.info("%s attacked by: %s" % (planet, attacking_fleets))
+				log.info("Safe ship count: %s" % safe_ship_count)
 			
 				defend = True
 				
@@ -37,18 +43,18 @@ class MyBot(BaseBot):
 					needed_ship_count = planet.needed_ship_count(turns=fleet.turns_remaining)
 					
 					if needed_ship_count > 0:
-						best_sources = planet.best_sources(
-							max_distance=fleet.turns_remaining
-						)
+						best_sources = planet.best_sources(max_distance=fleet.turns_remaining)
 						
 						# don't try to defend further fleets if can't counter closer fleets
 						if len(best_sources) == 0:
-							log.debug("Can't defend anymore!")
+							log.info("Can't defend anymore!")
 							defend = False
 							break
 						
+						self.universe.begin_transaction()
+						
 						for source in best_sources:
-							source_sent_ships = min(source.available_ship_count(), needed_ship_count)# TODO: make a method for that (min's 1st arg)?
+							source_sent_ships = min(source.available_ship_count(), needed_ship_count)
 							source.queue_fleet(planet, source_sent_ships)
 							needed_ship_count -= source_sent_ships
 							
@@ -56,16 +62,15 @@ class MyBot(BaseBot):
 								break;
 							
 						if needed_ship_count <= 0:
-							self.universe.send_queued_fleets()
-						else:
-							self.universe.clear_queued_fleets()
+							self.universe.commit_transaction()
+							cache.store.clear()
 				
 				# if can't defend this planet anymore, try next
 				if defend == False:
 					continue
 		
 		
-		log.debug("ATTACK")
+		log.info("ATTACK")
 		for target in self.universe.best_targets():
 			available_ships = 0
 			longest_distance = 0
@@ -74,24 +79,45 @@ class MyBot(BaseBot):
 			for source in best_sources:
 				available_ships += source.available_ship_count()
 				longest_distance = max(longest_distance, source.distance(target))
-		
+				needed_ship_count = target.needed_ship_count(longest_distance)
+				if available_ships >= needed_ship_count:
+					break
+
 			target_in_future = target.in_future(longest_distance)
+
 			if target_in_future.owner == player.ME:
 				continue
-			if available_ships < target.needed_ship_count(longest_distance):
+		
+			if available_ships < needed_ship_count:
 				break
 			
+			log.info("Attacking %s, %i ships needed." % (target, needed_ship_count))
+			self.universe.begin_transaction()
+			
 			for source in best_sources:
-				target_in_future = target.in_future(longest_distance)
-				if not target_in_future.owner == player.ME:
-					source.send_fleet(target, min(source.available_ship_count(), target.needed_ship_count(longest_distance)))
+#				target_in_future = target.in_future(longest_distance)
+#				if not target_in_future.owner == player.ME:
+				log.debug(source)
+				log.debug(source.available_ship_count())
+				source_sent_ships = min(source.available_ship_count(), needed_ship_count)
+				source.queue_fleet(target, source_sent_ships)
+				needed_ship_count -= source_sent_ships
+				
+				if needed_ship_count <= 0:
+					break
+			
+			self.universe.commit_transaction()
+			cache.store.clear()	
+		
+		self.universe.send_queued_fleets()
+		log.debug(cache.stats)
 
 
-class MyPlanet(Planet2):
+class MyPlanet(Planet):
 	
 	def get_ship_count(self):
-		queued_ships = [ qfleet['ship_count'] for qfleet in self.universe.fleet_queue if qfleet['source'] == self ]
-		return self._ship_count + sum(queued_ships)
+		queued_ships_count = sum([ qfleet['ship_count'] for qfleet in self.universe.fleet_queue if qfleet['source'] == self ])
+		return self._ship_count - queued_ships_count
 	
 	def set_ship_count(self, value):
 		self._ship_count = value
@@ -114,6 +140,7 @@ class MyPlanet(Planet2):
 		else:
 			return self.ship_count + self.safe_ship_count(turns) + 1
 	
+	@cache.memoize
 	def safe_ship_count(self, turns=0):
 		"""The number of additional (to ship_count) ships needed so that the planet stays or becomes mine."""
 		fleets = sorted(
@@ -122,10 +149,16 @@ class MyPlanet(Planet2):
 			key=lambda fleet: fleet.turns_remaining
 		)
 		
-		# TODO: include also queued fleets?
+		qfleets = sorted(
+			[ qfleet for qfleet in self.universe.fleet_queue if qfleet['destination'] == self ],
+			reverse=True,
+			key=lambda qfleet: qfleet['turns_remaining']
+		)
 		
 		if len(fleets) != 0:
 			turns = max(turns, fleets[0].turns_remaining)
+		if len(qfleets) != 0:
+			turns = max(turns, qfleets[0]['turns_remaining'])
 		
 		value = 0
 		total = 0
@@ -147,7 +180,9 @@ class MyPlanet(Planet2):
 					current -= fleet.ship_count
 				else:
 					current += fleet.ship_count
-		
+			
+			current -= sum([ qfleet['ship_count'] for qfleet in qfleets if qfleet['turns_remaining'] == i ])
+			
 			total += current
 			value = max(value, total)
 		
@@ -155,16 +190,63 @@ class MyPlanet(Planet2):
 #		log.debug(value)
 		return value
 	
-	def best_sources(self, owner=player.ME, max_distance=9999.0):
+	@cache.memoize
+	def in_future(self, turns=1):
+		"""Calculates state of planet in `turns' turns."""
+		planet = copy(self)
+
+		arriving_fleets = self.universe.find_fleets(destination=self)
+		arriving_qfleets = [ qfleet for qfleet in self.universe.fleet_queue if qfleet['destination'] == self ]
+
+		for i in range(1, turns+1):
+			# account planet growth
+			if planet.owner != player.NOBODY:
+				planet.ship_count = planet.ship_count + self.growth_rate
+
+			# get fleets which will arrive in that turn
+			fleets = [ x for x in arriving_fleets if x.turns_remaining == i ]
+
+			# assuming 2-player scenario!
+			ships = []
+			for id in [1,2]:
+				count = sum( [ x.ship_count for x in fleets if x.owner == player.PLAYER_MAP.get(int(id)) ] )
+				if id == 1:
+					count += sum([ qfleet['ship_count'] for qfleet in arriving_qfleets if qfleet['turns_remaining'] == i ])
+				if player.PLAYER_MAP[id] == planet.owner:
+					count += planet.ship_count
+
+#                if count > 0:
+				ships.append({'player':player.PLAYER_MAP.get(id), 'ships':count})
+
+			# neutral planet has own fleet
+			if planet.owner == player.NOBODY:
+				ships.append({'player':player.NOBODY,'ships':planet.ship_count})
+
+			# calculate outcome
+			if len(ships) > 1:
+				s = sorted(ships, key=lambda s : s['ships'], reverse=True)
+
+				winner = s[0]
+				second = s[1]
+
+				if winner['ships'] == second['ships']:
+					planet.ship_count=0
+				else:
+					planet.owner=winner['player']
+					planet.ship_count=winner['ships'] - second['ships']
+
+		return planet
+	
+	def best_sources(self, owner=player.ME, max_distance=9999):
 		planets = [ planet for planet in self.universe.find_planets(owner=owner) if (
 			planet.id != self.id and
-			planet.available_ship_count() > 0 and
+			(planet.available_ship_count() > 0 or owner != player.ME) and
 			planet.distance(self) <= max_distance
 		) ]
 		
 		return sorted(
 			planets,
-			key=lambda source: float(source.distance(self)) / float(source.ship_count + 1.0)
+			key=lambda source: float(source.distance(self))
 		)
 	
 	def sources_coefficient(self, owner=player.ME):
@@ -172,7 +254,7 @@ class MyPlanet(Planet2):
 		best_sources = self.best_sources(owner=owner)[0:3]
 		for source in best_sources:
 			distance = source.distance(self)
-			value += float(source.ship_count) / float(distance + 1.0) #/ float(self.safe_ship_count(distance)+1.0)
+			value += 1.0 / float(distance + 1.0) #/ float(self.safe_ship_count(distance)+1.0)
 		value /= float(max(1, len(best_sources)))
 #		log.debug(owner)
 #		log.debug(self.best_sources(owner=owner))
@@ -181,12 +263,7 @@ class MyPlanet(Planet2):
 		
 		return value
 	
-	def target_coefficient(self, attacker=player.ME):
-		if attacker == player.ME:
-			enemy = player.ENEMIES
-		elif attacker in player.ENEMIES:
-			enemy = player.ME
-		
+	def target_coefficient(self):
 #		log.debug("target coefficient of %s" % self)
 #		log.debug(self.sources_coefficient(owner=attacker))
 #		log.debug(self.sources_coefficient(owner=enemy))
@@ -194,27 +271,17 @@ class MyPlanet(Planet2):
 #		log.debug(self.safe_ship_count())
 #		log.debug(self.growth_rate)
 		
-		value = self.sources_coefficient(owner=attacker) + 1.0
-		value /= self.sources_coefficient(owner=enemy) + 1.0
-		value /= float(self.ship_count + 1.0)
-		value /= float(self.safe_ship_count(10) + 1.0)
+		value = self.sources_coefficient() + 1.0
+		#value /= self.sources_coefficient(owner=enemy) + 1.0
+		#value /= float(self.ship_count + 1.0)
+		value /= float(self.needed_ship_count() + 1.0)
 		value *= float(self.growth_rate)
 
 		#TODO: this works only for player.ME
 		if self.owner != player.NOBODY:
-			value *= (float(len(self.universe.my_planets)) / float(len(self.universe.enemy_planets))) ** 2
+			value *= (float(len(self.universe.my_planets)) / float(len(self.universe.enemy_planets)))
 		
 		return value
-	
-	@property
-	def attacking_fleets(self):
-		"""Same as in the original kit, but sorted by turns_remaining."""
-		fleets = self.universe.find_fleets(destination=self, owner=player.EVERYBODY - self.owner)
-		
-		return sorted(
-			fleets,
-			key=lambda fleet: fleet.turns_remaining
-		)
 	
 	def queue_fleet(self, target, ship_count):
 		if isinstance(target, set):
@@ -225,20 +292,20 @@ class MyPlanet(Planet2):
 				return self.universe.queue_fleet(self, target, ship_count)
 		return None
 
-class MyUniverse(Universe2):
+class MyUniverse(Universe):
 	
 	fleet_queue = []
+	queue_transaction = []
 	
-	def best_targets(self, attacker=player.ME):
-		if attacker == player.ME:
-			targets = self.not_my_planets
-		else:
-			targets = self.my_planets
-			
+	#@cache.memoize
+	def best_targets(self):
 		return sorted(
-			targets,
+			self.not_my_planets,
 			reverse=True,
-			key=lambda planet: planet.target_coefficient(attacker=attacker)
+			key=lambda planet: (
+				planet.sources_coefficient(player.ME) >= planet.sources_coefficient(player.ENEMIES),
+				planet.target_coefficient()
+			)
 		)
 	
 	def max_sources(self, owner=player.ME):
@@ -249,20 +316,25 @@ class MyUniverse(Universe2):
 		
 		return max(3, planets_count/2)
 	
+	def begin_transaction(self):
+		del self.queue_transaction[:]
+	
 	def queue_fleet(self, source, destination, ship_count):
-		self.fleet_queue.append({
+		self.queue_transaction.append({
 			'source': source,
 			'destination': destination,
-			'ship_count': ship_count
+			'ship_count': ship_count,
+			'turns_remaining': source.distance(destination)
 		})
-	
-	def clear_queued_fleets(self):
-		del self.fleet_queue[:]
+		
+	def commit_transaction(self):
+		self.fleet_queue.extend(self.queue_transaction)
 	
 	def send_queued_fleets(self):
 		for qfleet in self.fleet_queue:
 			self.send_fleet(qfleet['source'], qfleet['destination'], qfleet['ship_count'])
-		self.clear_queued_fleets()
-
+		
+		del self.fleet_queue[:]
+				
 
 Game(MyBot, universe_class=MyUniverse, planet_class=MyPlanet)

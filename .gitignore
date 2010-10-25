@@ -4,3 +4,4 @@
 log.txt
 generated.htm
 *.bak
+/temp/
