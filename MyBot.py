@@ -50,8 +50,8 @@ class MyBot(BaseBot):
 								
 				for fleet in attacking_fleets:
 					needed_ship_count = planet.needed_ship_count(turns=fleet.turns_remaining)
-					log.info("Countering {0}.".format(fleet))
-					log.info("Needed ship count: {0}".format(needed_ship_count))
+					log.info("Countering %s" % fleet)
+					log.info("Needed ship count: %d" % needed_ship_count)
 					
 					if needed_ship_count > 0:
 						best_sources = planet.best_sources(max_distance=fleet.turns_remaining)
@@ -88,7 +88,7 @@ class MyBot(BaseBot):
 			        self.universe.my_ship_count() > self.universe.enemy_ship_count()):
 				break
 			   
-			log.info("Ships needed for {0}: {1}".format(target, target.needed_ship_count()))
+			log.info("Ships needed for %s: %d" % (target, target.needed_ship_count()))
 			available_ships = 0
 			longest_distance = 0
 			best_sources = target.best_sources()
@@ -324,7 +324,6 @@ class MyPlanet(Planet):
 		for source in best_sources:
 			value += source.distance(self)
 		value /= float(max(1, len(best_sources)))
-		#log.debug("sc {0} / {1}: {2}".format(self, owner, value))
 		
 		return value
 	
@@ -336,7 +335,6 @@ class MyPlanet(Planet):
 			value += (source.ship_count + source.growth_rate) / float(source.distance(self))
 			weight += 1.0 / source.distance(self)
 		value /= weight
-		#log.debug("sc {0} / {1}: {2}".format(self, owner, value))
 		
 		return value
 	
@@ -480,7 +478,7 @@ class MyUniverse(Universe):
 		del self.queue_transaction[:]
 	
 	def queue_fleet(self, source, destination, ship_count):
-		log.debug("Queuing fleet of {0} from {1} to {2}.".format(ship_count, source, destination))
+		log.debug("Queuing fleet of %d from %s to %s." % (ship_count, source, destination))
 		self.queue_transaction.append({
 			'source': source,
 			'destination': destination,
