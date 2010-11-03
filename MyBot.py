@@ -26,7 +26,7 @@ class MyBot(BaseBot):
 		
 		self.defend()
 		self.attack()
-		#self.tunnel()
+		self.tunnel()
 		
 		self.universe.send_queued_fleets()
 		log.debug(cache.stats)
@@ -82,8 +82,10 @@ class MyBot(BaseBot):
 	def attack(self):
 		log.info("ATTACK")
 		for target in self.universe.best_targets():
-			if not (self.universe.my_growth_rate() <= 1.1 * self.universe.enemy_growth_rate() or
-			        self.universe.my_ship_count() >= self.universe.enemy_ship_count()):
+			log.debug("growth rate: %d / %d" % (self.universe.my_growth_rate(), self.universe.enemy_growth_rate(in_future=True)))
+			log.debug("ship count: %d / %d" % (self.universe.my_ship_count(), self.universe.enemy_ship_count()))
+			if not (self.universe.my_growth_rate(in_future=True) <= self.universe.enemy_growth_rate(in_future=True) or
+			        self.universe.my_ship_count() > self.universe.enemy_ship_count()):
 				break
 			   
 			log.info("Ships needed for {0}: {1}".format(target, target.needed_ship_count()))
@@ -122,18 +124,28 @@ class MyBot(BaseBot):
 	
 	
 	def tunnel(self):
-		front_planets = Planets([ planet for planet in self.universe.my_planets if planet.is_front() ])
-		front_planets_count = len(front_planets)
-		source_planets = self.universe.my_planets - front_planets
+		log.info("TUNNEL")
+		self.universe.begin_transaction()
 		
-		if front_planets_count != 0:
-			self.universe.begin_transaction()
-			for source in source_planets:
-				available_ships = source.available_ship_count()/front_planets_count
-				if available_ships > 0:
-					for planet in front_planets:
-						source.queue_fleet(planet, available_ships)
-			self.universe.commit_transaction()
+		for planet in self.universe.my_planets:
+			frontier_planet = planet.my_frontier_planet
+			if frontier_planet and planet.available_ship_count() > 0:
+				planet.queue_fleet(frontier_planet, planet.available_ship_count())
+		
+		self.universe.commit_transaction()
+		
+#		front_planets = Planets([ planet for planet in self.universe.my_planets if planet.is_front() ])
+#		front_planets_count = len(front_planets)
+#		source_planets = self.universe.my_planets - front_planets
+#		
+#		if front_planets_count != 0:
+#			self.universe.begin_transaction()
+#			for source in source_planets:
+#				available_ships = source.available_ship_count()/front_planets_count
+#				if available_ships > 0:
+#					for planet in front_planets:
+#						source.queue_fleet(planet, available_ships)
+#			self.universe.commit_transaction()
 
 
 class MyPlanet(Planet):
@@ -306,8 +318,8 @@ class MyPlanet(Planet):
 			key=lambda source: float(source.distance(self))
 		)
 	
-	def average_source_distance(self, owner=player.ME):
-		value = 0
+	def source_coefficient(self, owner=player.ME):
+		value = 0.0
 		best_sources = self.best_sources(owner=owner)[0:3]
 		for source in best_sources:
 			value += source.distance(self)
@@ -316,17 +328,29 @@ class MyPlanet(Planet):
 		
 		return value
 	
+	def danger_coefficient(self, attacker=player.ENEMIES):
+		value = 0.0
+		weight = 0.0
+		best_sources = self.best_sources(owner=attacker)[0:3]
+		for source in best_sources:
+			value += (source.ship_count + source.growth_rate) / float(source.distance(self))
+			weight += 1.0 / source.distance(self)
+		value /= weight
+		#log.debug("sc {0} / {1}: {2}".format(self, owner, value))
+		
+		return value
+	
 	def target_coefficient(self):
 #		log.debug("target coefficient of %s" % self)
-#		log.debug(self.average_source_distance() + 1.0)
-#		log.debug(self.average_source_distance(owner=player.ENEMIES) + 1.0)
-#		log.debug(float(max(1.0, self.needed_ship_count(int(self.average_source_distance())))))
+#		log.debug(self.source_coefficient() + 1.0)
+#		log.debug(self.source_coefficient(owner=player.ENEMIES) + 1.0)
+#		log.debug(float(max(1.0, self.needed_ship_count(int(self.source_coefficient())))))
 #		log.debug(self.growth_rate)
 		
 		value = 1.0
-		value /= self.average_source_distance() + 1.0
-		value *= self.average_source_distance(owner=player.ENEMIES) + 1.0
-		value /= float(max(1.0, self.needed_ship_count(int(self.average_source_distance()))))
+		value /= self.source_coefficient() + 1.0
+		value *= self.source_coefficient(owner=player.ENEMIES) + 1.0
+		value /= float(max(1.0, self.needed_ship_count(int(self.source_coefficient()))))
 		
 		# TODO: this is probably crap, invent better way to support attacks
 		if hasattr(self, 'attacked'):
@@ -353,12 +377,37 @@ class MyPlanet(Planet):
 	def set_attacked(self):
 		if not hasattr(self, 'attacked'):
 			self.attacked = 0
+	
+	@property
+	def enemy_nearest_planet_distance(self):
+		distance = 9999
+		for planet in self.universe.enemy_planets:
+			if planet.distance(self) < distance:
+				distance = planet.distance(self)
+				#nearest_planet = planet
 		
-	def is_front(self):
-		log.debug(self)
-		log.debug(self.universe.front_average())
-		log.debug(self.average_source_distance(player.ENEMIES))
-		return self.average_source_distance(player.ENEMIES) < self.universe.front_average()
+		return distance
+	
+	@property
+	def my_frontier_planet(self):
+		closest_planets = sorted(
+			self.universe.my_planets,
+			key=lambda planet: planet.distance(self)
+		)
+		
+		for planet in closest_planets:
+			if planet.enemy_nearest_planet_distance < self.enemy_nearest_planet_distance and \
+			   planet.danger_coefficient() > self.danger_coefficient():
+				log.debug("%s frontier planet: %s (%d vs %d)" % (self, planet, self.enemy_nearest_planet_distance, planet.enemy_nearest_planet_distance))
+				return planet
+		
+		return None
+		
+#	def is_front(self):
+#		log.debug(self)
+#		log.debug(self.universe.front_average())
+#		log.debug(self.source_coefficient(player.ENEMIES))
+#		return self.source_coefficient(player.ENEMIES) < self.universe.front_average()
 	
 	def queue_fleet(self, target, ship_count):
 		if isinstance(target, set):
@@ -385,15 +434,27 @@ class MyUniverse(Universe):
 		planet_ship_count = sum([ planet.ship_count for planet in self.enemy_planets ])
 		return planet_ship_count + fleet_ship_count
 	
-	def my_growth_rate(self):
-		return sum([ planet.growth_rate for planet in self.my_planets ])
+	def my_growth_rate(self, in_future=False):
+		value = sum([ planet.growth_rate for planet in self.my_planets ])
 		
-	def enemy_growth_rate(self):
-		return sum([ planet.growth_rate for planet in self.enemy_planets ])
+		if in_future:
+			my_attacked_neutrals = [ fleet.destination for fleet in self.my_fleets if fleet.destination.owner == player.NOBODY ]
+			value += sum([ planet.growth_rate for planet in my_attacked_neutrals ])
+		
+		return value
+		
+	def enemy_growth_rate(self, in_future=False):
+		value = sum([ planet.growth_rate for planet in self.enemy_planets ])
+		
+		if in_future:
+			enemy_attacked_neutrals = [ fleet.destination for fleet in self.enemy_fleets if fleet.destination.owner == player.NOBODY ]
+			value += sum([ planet.growth_rate for planet in enemy_attacked_neutrals ])
+
+		return value
 	
-	@cache.memoize
-	def front_average(self):
-		return sum([ planet.average_source_distance(owner=player.ENEMIES) for planet in self.my_planets ])/len(self.my_planets)
+#	@cache.memoize
+#	def front_average(self):
+#		return sum([ planet.source_coefficient(owner=player.ENEMIES) for planet in self.my_planets ])/len(self.my_planets)
 	
 	#@cache.memoize
 	def best_targets(self):
@@ -401,7 +462,8 @@ class MyUniverse(Universe):
 			self.not_my_planets,
 			reverse=True,
 			key=lambda planet: (
-				1.0 * (planet.average_source_distance(player.ME) <= planet.average_source_distance(player.ENEMIES)),
+				1.0 * (hasattr(planet, 'attacked')),
+				1.0 * (planet.source_coefficient(player.ME) <= planet.source_coefficient(player.ENEMIES)),
 				planet.target_coefficient()
 			)
 		)
