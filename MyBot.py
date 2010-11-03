@@ -14,13 +14,10 @@ log.setLevel(logging.DEBUG)
 
 class MyBot(BaseBot):
 	# TODO: catch TimeIsUp exception
-	first_turn = True
+	turn = 0
 	
 	def do_turn(self):
-		# TODO: count how many we can send on the first attack
-#		if self.first_turn:
-#			self.first_turn = False
-#			return
+		self.turn += 1
 
 		cache.store.clear()
 		
@@ -82,10 +79,11 @@ class MyBot(BaseBot):
 	def attack(self):
 		log.info("ATTACK")
 		for target in self.universe.best_targets():
-			log.debug("growth rate: %d / %d" % (self.universe.my_growth_rate(), self.universe.enemy_growth_rate(in_future=True)))
+			log.debug("growth rate: %d / %d" % (self.universe.my_growth_rate(in_future=True), self.universe.enemy_growth_rate(in_future=True)))
 			log.debug("ship count: %d / %d" % (self.universe.my_ship_count(), self.universe.enemy_ship_count()))
 			if not (self.universe.my_growth_rate(in_future=True) <= self.universe.enemy_growth_rate(in_future=True) or
-			        self.universe.my_ship_count() > self.universe.enemy_ship_count()):
+			        self.universe.my_ship_count() > self.universe.enemy_ship_count() or
+			        self.turn <= 30):
 				break
 			   
 			log.info("Ships needed for %s: %d" % (target, target.needed_ship_count()))
@@ -112,7 +110,15 @@ class MyBot(BaseBot):
 			for source in best_sources:
 #				target_in_future = target.in_future(longest_distance)
 #				if not target_in_future.owner == player.ME:
-				source_sent_ships = min(source.available_ship_count(), needed_ship_count)
+				if self.turn == 1:
+					available_ship_count = min(
+						source.available_ship_count(),
+						source.distance([ p for p in self.universe.enemy_planets ][0]) * source.growth_rate
+					)
+				else:
+					available_ship_count = source.available_ship_count()
+				
+				source_sent_ships = min(available_ship_count, needed_ship_count)
 				source.queue_fleet(target, source_sent_ships)
 				needed_ship_count -= source_sent_ships
 				
@@ -232,10 +238,11 @@ class MyPlanet(Planet):
 		for i in range(1, turns+1):
 			arriving_fleets = [ x for x in fleets if x.turns_remaining == i ]
 			
+			# this is probably wrong, we cannot assume that this state will be true if we send some ships
 			in_future = self.in_future(i)
 			
 			if in_future.owner == player.ME:
-				current = -self.growth_rate
+				current = 0#-self.growth_rate
 			elif in_future.owner == player.NOBODY:
 				current = 0
 			else:
@@ -334,7 +341,7 @@ class MyPlanet(Planet):
 		for source in best_sources:
 			value += (source.ship_count + source.growth_rate) / float(source.distance(self))
 			weight += 1.0 / source.distance(self)
-		value /= weight
+		value /= max(1.0, weight)
 		
 		return value
 	
@@ -346,9 +353,14 @@ class MyPlanet(Planet):
 #		log.debug(self.growth_rate)
 		
 		value = 1.0
+		
 		value /= self.source_coefficient() + 1.0
 		value *= self.source_coefficient(owner=player.ENEMIES) + 1.0
-		value /= float(max(1.0, self.needed_ship_count(int(self.source_coefficient()))))
+		
+		value *= self.danger_coefficient(attacker=player.ME) + 1.0
+		value /= self.danger_coefficient(attacker=player.ENEMIES) + 1.0
+		
+		value /= float(max(1.0, self.needed_ship_count(int(self.source_coefficient())))) ** 2
 		
 		# TODO: this is probably crap, invent better way to support attacks
 		if hasattr(self, 'attacked'):
@@ -362,8 +374,8 @@ class MyPlanet(Planet):
 			#value /= float(self.ship_count + 1.0)
 
 		if self.owner != player.NOBODY:
-			value *= float(self.universe.my_ship_count()) / float(self.universe.enemy_ship_count())
-			value *= float(self.universe.my_growth_rate()) / float(self.universe.enemy_growth_rate())
+			value *= (self.universe.my_ship_count()) / float(self.universe.enemy_ship_count()) ** 2
+			value *= (self.universe.my_growth_rate()) / float(self.universe.enemy_growth_rate()) ** 2
 #			value *= 1.0 * (
 #				self.universe.my_ship_count() > self.universe.enemy_ship_count() and \
 #				self.universe.my_growth_rate() > self.universe.enemy_growth_rate()
@@ -395,7 +407,7 @@ class MyPlanet(Planet):
 		
 		for planet in closest_planets:
 			if planet.enemy_nearest_planet_distance < self.enemy_nearest_planet_distance and \
-			   planet.danger_coefficient() > self.danger_coefficient():
+			   planet.danger_coefficient() >= self.danger_coefficient():
 				log.debug("%s frontier planet: %s (%d vs %d)" % (self, planet, self.enemy_nearest_planet_distance, planet.enemy_nearest_planet_distance))
 				return planet
 		
@@ -432,12 +444,31 @@ class MyUniverse(Universe):
 		planet_ship_count = sum([ planet.ship_count for planet in self.enemy_planets ])
 		return planet_ship_count + fleet_ship_count
 	
+	def my_attacked_neutrals(self):
+		attacked_neutrals = []
+		for fleet in self.my_fleets:
+			if fleet.destination.owner == player.NOBODY and fleet.destination not in attacked_neutrals:
+				attacked_neutrals.append(fleet.destination)
+				
+		for qfleet in self.fleet_queue:
+			if qfleet['destination'].owner == player.NOBODY and qfleet['destination'] not in attacked_neutrals:
+				attacked_neutrals.append(qfleet['destination'])
+		
+		return attacked_neutrals
+	
+	def enemy_attacked_neutrals(self):
+		attacked_neutrals = []
+		for fleet in self.enemy_fleets:
+			if fleet.destination.owner == player.NOBODY and fleet.destination not in attacked_neutrals:
+				attacked_neutrals.append(fleet.destination)
+		
+		return attacked_neutrals	
+	
 	def my_growth_rate(self, in_future=False):
 		value = sum([ planet.growth_rate for planet in self.my_planets ])
 		
 		if in_future:
-			my_attacked_neutrals = [ fleet.destination for fleet in self.my_fleets if fleet.destination.owner == player.NOBODY ]
-			value += sum([ planet.growth_rate for planet in my_attacked_neutrals ])
+			value += sum([ planet.growth_rate for planet in self.my_attacked_neutrals() ])
 		
 		return value
 		
@@ -445,8 +476,7 @@ class MyUniverse(Universe):
 		value = sum([ planet.growth_rate for planet in self.enemy_planets ])
 		
 		if in_future:
-			enemy_attacked_neutrals = [ fleet.destination for fleet in self.enemy_fleets if fleet.destination.owner == player.NOBODY ]
-			value += sum([ planet.growth_rate for planet in enemy_attacked_neutrals ])
+			value += sum([ planet.growth_rate for planet in self.enemy_attacked_neutrals() ])
 
 		return value
 	
@@ -461,6 +491,7 @@ class MyUniverse(Universe):
 			reverse=True,
 			key=lambda planet: (
 				1.0 * (hasattr(planet, 'attacked')),
+				#1.0 * (planet.owner == player.NOBODY),
 				1.0 * (planet.source_coefficient(player.ME) <= planet.source_coefficient(player.ENEMIES)),
 				planet.target_coefficient()
 			)
