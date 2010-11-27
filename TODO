@@ -1,0 +1,18 @@
++ split project into more files
+- use Fleet class for queued fleets, | is union operator!
+- maybe calculate enemy center and my center (including fleets in move) to determine front planets (and replace source coeff?)
+- dont treat all the neutrals attacked by the enemy as his potential growth increase (maybe)
++ include the danger coefficient in available ship count (planets in danger shouldnt send ships)
+- include attacked planets (e.g. universe.my_planets_and_attacked) in: defense, tunneling, calculating my growth_rate (avoid mass attack when enemy growth rate is higher than mine)
+- include how many ships attacked planet will give me after x turns (fixed x or not?)
+- bot sometimes chooses planets with worse growth and/or greater ship count only because they are closer?
+- use planets that can't be defended to attack
+- scheduled fleets (and cancel transaction if not enough ships in future, check every turn)
+- Knapsack
++ why bot keeps attacking neutrals if can attack enemy and win?
+- don't defend if have lower growth rate and lower ship count?
+- expand first to the planets near/on the front line? but enemy more likely to steal it... steal planets on front line!
+- when attacking send more ships (calculate how many) to later conquer nearby planets if possible
+- don't count all the fleets in enemy ship count, only those uncountered attacking me
+- instead of just checking if have higher growth, check if this growth is enough to have mre ships before the end of the game
+- do nothing in turn 1 if enemy is close
