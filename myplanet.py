@@ -28,12 +28,16 @@ class MyPlanet(Planet):
 #		#TODO: works only for my ships, change it? if not my planet return 0?
 #		return max(1, len(self.universe.enemy_planets) * 2 - self.growth_rate)
 	
-	def available_ship_count(self, turns=0):
+	def available_ship_count(self, turns=0, with_danger=True):
 		"""The number of ships the planet can send without risk."""
 		if self.owner != player.ME:
 			raise Exception("Should be run only on my planets!")
 		
-		value = max(0, self.ship_count - self.safe_ship_count(turns) - self.danger_coefficient())
+		value = self.ship_count - self.safe_ship_count(turns)
+		if with_danger:
+			value -= self.danger_coefficient()
+		
+		value = max(0, value)
 		
 		assert value >= 0
 		return value
@@ -191,7 +195,7 @@ class MyPlanet(Planet):
 		return value
 	
 	def danger_coefficient(self, attacker=player.ENEMIES):
-		"""Number of ships that in case of attack can't be countered by help of nearby allied planets."""
+		"""Number of ships that in case of attack can't be countered by help of my nearby planets."""
 		defender = player.ME if attacker == player.ENEMIES else player.ENEMIES
 	
 		value = 0
@@ -200,57 +204,56 @@ class MyPlanet(Planet):
 		last_distance = 0
 		
 		for source in attacker_sources:
-			defender_sources = self.best_sources(owner=defender, max_distance=self.distance(source)+1)
-			value += source.ship_count - (sum([ planet.ship_count for planet in defender_sources ]) - attacker_ship_count)
+			defender_sources = self.best_sources(owner=defender, max_distance=self.distance(source)-1)
+			current = source.ship_count - max(0, sum([ planet.ship_count for planet in defender_sources ]) - attacker_ship_count)
 			
 			if self.owner != player.NOBODY:
-				value -= self.growth_rate * (self.distance(source) - last_distance)
+				current -= self.growth_rate * (self.distance(source) - last_distance)
 			
 			attacker_ship_count += source.ship_count
 			last_distance = self.distance(source)
-		
-		value = max(0, value)
+			value += max(0, current)
 			
-		#log.debug('danger_coefficient: %s %d %s' % (self, value, attacker))
+		log.debug('danger_coefficient: %s %d %s' % (self, value, attacker))
 		
 		assert value >= 0
 		return value
 	
 	def target_coefficient(self):
 		value = 1.0
-		log.debug('target_coefficient: %s' % self)
+#		log.debug('target_coefficient: %s' % self)
 		
 		value /= self.source_coefficient() + 1.0
-		log.debug('sc ME = %f' % (self.source_coefficient() + 1.0))
-		log.debug(value)
+#		log.debug('sc ME = %f' % (self.source_coefficient() + 1.0))
+#		log.debug(value)
 		value *= self.source_coefficient(owner=player.ENEMIES) + 1.0
-		log.debug('sc ENEMY = %f' % (self.source_coefficient(owner=player.ENEMIES) + 1.0))
-		log.debug(value)
+#		log.debug('sc ENEMY = %f' % (self.source_coefficient(owner=player.ENEMIES) + 1.0))
+#		log.debug(value)
 		
 		value *= self.danger_coefficient(attacker=player.ME) + 1.0
-		log.debug('dc ME = %f' % (self.danger_coefficient(attacker=player.ME) + 1.0))
-		log.debug(value)
+#		log.debug('dc ME = %f' % (self.danger_coefficient(attacker=player.ME) + 1.0))
+#		log.debug(value)
 		value /= self.danger_coefficient(attacker=player.ENEMIES) + 1.0
-		log.debug('dc ENEMY = %f' % (self.danger_coefficient(attacker=player.ENEMIES) + 1.0))
-		log.debug(value)
+#		log.debug('dc ENEMY = %f' % (self.danger_coefficient(attacker=player.ENEMIES) + 1.0))
+#		log.debug(value)
 		
-		value /= max(1, self.needed_ship_count(int(self.source_coefficient()))) ** 2
-		log.debug('needed_ship_count = %d' % max(1, self.needed_ship_count(int(self.source_coefficient()))))
-		log.debug(value)
+		value /= max(1, self.needed_ship_count(int(self.source_coefficient()))) #** 2
+#		log.debug('needed_ship_count = %d' % max(1, self.needed_ship_count(int(self.source_coefficient()))))
+#		log.debug(value)
 		
 		value *= self.growth_rate
-		log.debug('growth_rate = %d' % self.growth_rate)
-		log.debug(value)
+#		log.debug('growth_rate = %d' % self.growth_rate)
+#		log.debug(value)
 		
 		#value /= float(self.ship_count + 1.0)
 
 		if self.owner != player.NOBODY:
-			value *= (self.universe.my_ship_count(with_fleets=True) / float(self.universe.enemy_ship_count(with_fleets=True))) ** 2
-			log.debug('ship_count ratio = %f' % (self.universe.my_ship_count(with_fleets=True) / float(self.universe.enemy_ship_count(with_fleets=True))))
-			log.debug(value)
-			value *= (self.universe.my_growth_rate() / float(self.universe.enemy_growth_rate())) ** 2
-			log.debug('growth_rate ratio = %f' % (self.universe.my_growth_rate() / float(self.universe.enemy_growth_rate())))
-			log.debug(value)
+			value *= max(1.0, (self.universe.my_ship_count(with_fleets=True) / float(self.universe.enemy_ship_count(with_fleets=True))) ** 2)
+#			log.debug('ship_count ratio = %f' % (self.universe.my_ship_count(with_fleets=True) / float(self.universe.enemy_ship_count(with_fleets=True))))
+#			log.debug(value)
+			value *= max(1.0, (self.universe.my_growth_rate() / float(self.universe.enemy_growth_rate())) ** 2)
+#			log.debug('growth_rate ratio = %f' % (self.universe.my_growth_rate() / float(self.universe.enemy_growth_rate())))
+#			log.debug(value)
 		
 		return value
 	
@@ -274,25 +277,32 @@ class MyPlanet(Planet):
 		
 		return distance
 	
-	@property
-	def my_frontier_planet(self):
+	def closest_planet(self, planets):
+		shortest_distance = 9999
+		closest = None
+		for planet in planets:
+			if self.distance(planet) < shortest_distance:
+				shortest_distance = self.distance(planet)
+				closest = planet
+		
+		return closest
+	
+	def my_frontier_planet(self, destination):
 		closest_planets = sorted(
 			self.universe.my_planets,
 			key=lambda planet: planet.distance(self)
 		)
 		
 		for planet in closest_planets:
-			if planet.enemy_nearest_planet_distance < self.enemy_nearest_planet_distance and \
-			   planet.danger_coefficient() >= self.danger_coefficient():
-				log.debug("%s frontier planet: %s (%d vs %d)" % (self, planet, self.enemy_nearest_planet_distance, planet.enemy_nearest_planet_distance))
+			if planet.distance(destination) < self.distance(destination):
+				log.debug("%s frontier planet (destination=%s): %s" % (self, destination, planet))
 				return planet
 		
-		return None
+		return destination
 	
 	@property
 	def is_front(self):
-		# add some or
-		return self.enemy_nearest_planet_distance <= 2*self.my_nearest_planet_distance
+		return self.enemy_nearest_planet_distance <= self.my_nearest_planet_distance or self.danger_coefficient() > 0
 	
 	def queue_fleet(self, target, ship_count):
 		if isinstance(target, set):

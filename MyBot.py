@@ -1,4 +1,5 @@
 import logging
+import math
 
 from planetwars import BaseBot, Game
 from planetwars import player
@@ -77,7 +78,7 @@ class MyBot(BaseBot):
 						self.universe.begin_transaction()
 						
 						for source in best_sources:
-							source_sent_ships = min(source.available_ship_count(), needed_ship_count)
+							source_sent_ships = min(source.available_ship_count(with_danger=False), needed_ship_count)
 							source.queue_fleet(planet, source_sent_ships)
 							needed_ship_count -= source_sent_ships
 							
@@ -151,22 +152,37 @@ class MyBot(BaseBot):
 	def tunnel(self):
 		log.info("TUNNEL")
 		
-#		front_planets = Planets([ planet for planet in self.universe.my_planets if planet.is_front ])
-#	
-#		self.universe.begin_transaction()
-#		for planet in front_planets:
-#			for source in planet.best_sources():
-#				source.queue_fleet(planet, source.available_ship_count())
-#		self.universe.commit_transaction()
+		front_planets = [ planet for planet in self.universe.my_planets if planet.is_front ]
+		front_planets.extend([ planet for planet in self.attacked_planets.keys() if planet.is_front ])
+		
+		if len(front_planets) == 0:
+			return
+		
+		front_planets = sorted(
+			front_planets,
+			reverse=True,
+			key=lambda planet: planet.danger_coefficient()
+		)
+		log.debug('front_planets: %s' % front_planets)
+		sources_per_front = int(math.ceil((len(self.universe.my_planets) - len(front_planets)) / float(len(front_planets))))
+		
+		for front_planet in front_planets:
+			self.universe.begin_transaction()
+			
+			best_sources = front_planet.best_sources()[0:sources_per_front]
+			for source in best_sources:
+				source.queue_fleet(source.my_frontier_planet(front_planet), source.available_ship_count())
+		
+			self.universe.commit_transaction()
 
-		self.universe.begin_transaction()
-		
-		for planet in self.universe.my_planets:
-			frontier_planet = planet.my_frontier_planet
-			if frontier_planet and planet.available_ship_count() > 0:
-				planet.queue_fleet(frontier_planet, planet.available_ship_count())
-		
-		self.universe.commit_transaction()
+#		self.universe.begin_transaction()
+#		
+#		for planet in self.universe.my_planets:
+#			frontier_planet = planet.my_frontier_planet
+#			if frontier_planet and planet.available_ship_count() > 0:
+#				planet.queue_fleet(frontier_planet, planet.available_ship_count())
+#		
+#		self.universe.commit_transaction()
 				
 
 Game(MyBot, universe_class=MyUniverse, planet_class=MyPlanet)

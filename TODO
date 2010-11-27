@@ -5,7 +5,7 @@
 + include the danger coefficient in available ship count (planets in danger shouldnt send ships)
 - include attacked planets (e.g. universe.my_planets_and_attacked) in: defense, tunneling, calculating my growth_rate (avoid mass attack when enemy growth rate is higher than mine)
 - include how many ships attacked planet will give me after x turns (fixed x or not?)
-- bot sometimes chooses planets with worse growth and/or greater ship count only because they are closer?
++? bot sometimes chooses planets with worse growth and/or greater ship count only because they are closer?
 - use planets that can't be defended to attack
 - scheduled fleets (and cancel transaction if not enough ships in future, check every turn)
 - Knapsack
