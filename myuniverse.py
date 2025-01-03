@@ -2,6 +2,7 @@ import logging
 
 from planetwars.universe import Universe
 from planetwars import player
+from planetwars.util import Point
 
 import cache
 
@@ -12,6 +13,36 @@ class MyUniverse(Universe):
 	
 	fleet_queue = []
 	queue_transaction = []
+	
+	def my_center(self):
+		if len(self.my_planets) == 0:
+			return Point(0.0, 0.0)
+			
+		x = 0.0
+		y = 0.0
+		for planet in self.my_planets:
+			x += planet.position[0]
+			y += planet.position[1]
+		
+		x /= len(self.my_planets)
+		y /= len(self.my_planets)
+		
+		return Point(x, y)
+
+	def enemy_center(self):
+		if len(self.enemy_planets) == 0:
+			return Point(0.0, 0.0)
+	
+		x = 0.0
+		y = 0.0
+		for planet in self.enemy_planets:
+			x += planet.position[0]
+			y += planet.position[1]
+		
+		x /= len(self.enemy_planets)
+		y /= len(self.enemy_planets)
+		
+		return Point(x, y)
 	
 	def my_ship_count(self, with_fleets=True):
 		value = sum([ planet.ship_count for planet in self.my_planets ])
@@ -30,11 +61,13 @@ class MyUniverse(Universe):
 	def my_attacked_neutrals(self):
 		attacked_neutrals = []
 		for fleet in self.my_fleets:
-			if fleet.destination.owner == player.NOBODY and fleet.destination not in attacked_neutrals:
+			if fleet.destination.owner == player.NOBODY and fleet.destination not in attacked_neutrals and \
+			fleet.destination.in_future(fleet.turns_remaining).owner == player.ME:
 				attacked_neutrals.append(fleet.destination)
 				
 		for qfleet in self.fleet_queue:
-			if qfleet['destination'].owner == player.NOBODY and qfleet['destination'] not in attacked_neutrals:
+			if qfleet['destination'].owner == player.NOBODY and qfleet['destination'] not in attacked_neutrals and \
+			qfleet['destination'].in_future(qfleet['turns_remaining']).owner == player.ME:
 				attacked_neutrals.append(qfleet['destination'])
 		
 		return attacked_neutrals
@@ -42,7 +75,8 @@ class MyUniverse(Universe):
 	def enemy_attacked_neutrals(self):
 		attacked_neutrals = []
 		for fleet in self.enemy_fleets:
-			if fleet.destination.owner == player.NOBODY and fleet.destination not in attacked_neutrals:
+			if fleet.destination.owner == player.NOBODY and fleet.destination not in attacked_neutrals and \
+			fleet.destination.in_future(fleet.turns_remaining).owner in player.ENEMIES:
 				attacked_neutrals.append(fleet.destination)
 		
 		return attacked_neutrals

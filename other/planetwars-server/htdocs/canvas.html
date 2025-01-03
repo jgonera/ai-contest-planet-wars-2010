@@ -9,8 +9,8 @@
   <meta name="description" content="">
   <meta name="author" content="">
   <meta name="viewport" content="width=device-width; initial-scale=1.0; maximum-scale=1.0;">
-  <link rel="stylesheet" href="css/style.css?v=1">
-  <script src="js/modernizr-1.5.min.js"></script>
+  <link rel="stylesheet" href="style.css">
+  <script src="modernizr-1.5.min.js"></script>
   
 </head>
 <!--[if lt IE 7 ]> <body class="ie6"> <![endif]-->
@@ -23,6 +23,7 @@
 
   <div id="container">
     <header>
+      <h1>PlanetWars visualizer</h1>
       <table id="players">
         <tr>
           <td width='40%' align="right" class="player1Name"></td>
@@ -34,7 +35,7 @@
     
     <div id="main">
         <canvas id="display" width="640" height="640"></canvas>
-        <p id="turnCounter">Loading</p>
+        <p id="turnCounter"></p>
         <p id="controls">
             <a href="#" id="start-button"><span class="small">|</span>&laquo;</a> | 
             <a href="#" id="prev-frame-button">&laquo;</a> | 
@@ -42,12 +43,12 @@
             <a href="#" id="next-frame-button">&raquo;</a> | 
             <a href="#" id="end-button">&raquo;<span class="small">|</span></a>
         </p>
-        
         <p>
-          <br>
-          <br>
-          <canvas id="chart" width="640" height="100" ></canvas>
+            <br>
+            <br>
+            <canvas id="chart" width="640" height="100" ></canvas>
         </p>
+
     </div>
     
     <footer>
@@ -55,18 +56,18 @@
     </footer>
   </div> <!-- end of #container -->
 
-  <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.4.2/jquery.min.js"></script>
-  <script>!window.jQuery && document.write('<script src="js/jquery-1.4.2.min.js"><\/script>')</script>
+  <script src="jquery.min.js"></script>
   <script>
-  <?php
-  $input = file_get_contents('input');
-  echo 'var data = "' . str_replace("\n", "\\n", $input) . '"';
-  ?>
+%%SCRIPT%%
   </script>
-  <script src="js/visualizer.js?v=1"></script>
+  <script src="visualizer.js"></script>
+  <script src="game_state_extractor.js"></script>
 
   <!--[if lt IE 7 ]>
-    <script src="js/dd_belatedpng.js?v=1"></script>
-  <![endif]-->  
+    <script src="dd_belatedpng.js"></script>
+  <![endif]-->
+  <p id="visualizer" style="text-align: center; width: 100%;">
+  	<a id="gsec" href="#" onclick="game_state_extractor(); $('#gsec').hide(); return false;">Show Game State</a>
+  </p>
 </body>
 </html>

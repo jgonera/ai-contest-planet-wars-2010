@@ -3,6 +3,7 @@ import math
 
 from planetwars import BaseBot, Game
 from planetwars import player
+from planetwars.planet import Planets
 
 import cache
 from myplanet import MyPlanet
@@ -11,6 +12,8 @@ from myuniverse import MyUniverse
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
 
+INITIAL_TURNS = 30
+MAX_TURNS = 200
 
 class MyBot(BaseBot):
 	# TODO: count time
@@ -103,86 +106,102 @@ class MyBot(BaseBot):
 		for target in self.universe.best_targets():
 			log.debug("growth rate: %d / %d" % (self.universe.my_growth_rate(in_future=False), self.universe.enemy_growth_rate(in_future=False)))
 			log.debug("ship count: %d / %d" % (self.universe.my_ship_count(with_fleets=True), self.universe.enemy_ship_count(with_fleets=True)))
-			if not (self.universe.my_growth_rate(in_future=True) <= self.universe.enemy_growth_rate(in_future=True) or
-			        self.universe.my_ship_count() > self.universe.enemy_ship_count() or
-			        self.turn <= 30):
-				break
+#			if not (self.universe.my_growth_rate(in_future=True) <= self.universe.enemy_growth_rate(in_future=True) or
+#			        self.universe.my_ship_count() > self.universe.enemy_ship_count() or
+#			        self.turn <= INITIAL_TURNS):
+#				break
+			if (self.universe.my_ship_count() + self.universe.my_growth_rate(in_future=False) * (MAX_TURNS - self.turn) < self.universe.enemy_ship_count() + self.universe.enemy_growth_rate(in_future=False) * (MAX_TURNS - self.turn) or
+				self.universe.my_growth_rate(in_future=True) <= self.universe.enemy_growth_rate(in_future=True) or
+				self.universe.my_ship_count(with_fleets=False) > self.universe.enemy_ship_count() or
+				self.turn <= INITIAL_TURNS):
+		        
+				with_danger = (
+					self.universe.my_ship_count() + self.universe.my_growth_rate(in_future=False) * (MAX_TURNS - self.turn) < self.universe.enemy_ship_count() + self.universe.enemy_growth_rate(in_future=False) * (MAX_TURNS - self.turn) or
+					self.turn <= INITIAL_TURNS
+				)
 			   
-			log.info("Ships needed for %s: %d" % (target, target.needed_ship_count()))
-			available_ships = 0
-			longest_distance = 0
-			best_sources = target.best_sources()
+				log.info("Ships needed for %s: %d" % (target, target.needed_ship_count()))
+				available_ships = 0
+				longest_distance = 0
+				best_sources = target.best_sources()
 
-			if target.needed_ship_count() <= 0 or len(best_sources) == 0:
-				continue
+				if target.needed_ship_count() <= 0 or len(best_sources) == 0:
+					continue
 			
-			for source in best_sources:
-				available_ships += source.available_ship_count()
-				longest_distance = max(longest_distance, source.distance(target))
-				needed_ship_count = target.needed_ship_count(longest_distance)
-				if available_ships >= needed_ship_count:
-					break
+				for source in best_sources:
+					available_ships += source.available_ship_count(with_danger)
+					longest_distance = max(longest_distance, source.distance(target))
+					needed_ship_count = target.needed_ship_count(longest_distance)
+					if available_ships >= needed_ship_count:
+						break
 
-			if available_ships < needed_ship_count:
-				break
-			
-			log.info("Attacking %s, %i ships needed." % (target, needed_ship_count))
-			self.universe.begin_transaction()
-			
-			for source in best_sources:
-#				if self.turn == 1:
-#					available_ship_count = min(
-#						source.available_ship_count(),
-#						source.distance([ p for p in self.universe.enemy_planets ][0]) * source.growth_rate
-#					)
-#				else:
-				available_ship_count = source.available_ship_count()
-				
-				source_sent_ships = min(available_ship_count, needed_ship_count)
-				source.queue_fleet(target, source_sent_ships)
-				needed_ship_count -= source_sent_ships
-				
-				if needed_ship_count <= 0:
+				if available_ships < needed_ship_count:
 					break
 			
-			self.universe.commit_transaction()
-			self.attacked_planets[target] = longest_distance
+				log.info("Attacking %s, %i ships needed." % (target, needed_ship_count))
+				self.universe.begin_transaction()
+			
+				for source in best_sources:
+	#				if self.turn == 1:
+	#					available_ship_count = min(
+	#						source.available_ship_count(),
+	#						source.distance([ p for p in self.universe.enemy_planets ][0]) * source.growth_rate
+	#					)
+	#				else:
+					available_ship_count = source.available_ship_count(with_danger)
+				
+					source_sent_ships = min(available_ship_count, needed_ship_count)
+					source.queue_fleet(target, source_sent_ships)
+					needed_ship_count -= source_sent_ships
+				
+					if needed_ship_count <= 0:
+						break
+			
+				self.universe.commit_transaction()
+				self.attacked_planets[target] = longest_distance
 	
 	
 	def tunnel(self):
 		log.info("TUNNEL")
 		
-		front_planets = [ planet for planet in self.universe.my_planets if planet.is_front ]
-		front_planets.extend([ planet for planet in self.attacked_planets.keys() if planet.is_front ])
-		
-		if len(front_planets) == 0:
-			return
-		
-		front_planets = sorted(
-			front_planets,
-			reverse=True,
-			key=lambda planet: planet.danger_coefficient()
-		)
-		log.debug('front_planets: %s' % front_planets)
-		sources_per_front = int(math.ceil((len(self.universe.my_planets) - len(front_planets)) / float(len(front_planets))))
-		
-		for front_planet in front_planets:
-			self.universe.begin_transaction()
-			
-			best_sources = front_planet.best_sources()[0:sources_per_front]
-			for source in best_sources:
-				source.queue_fleet(source.my_frontier_planet(front_planet), source.available_ship_count())
-		
-			self.universe.commit_transaction()
+#		front_planets = [ planet for planet in self.universe.my_planets if planet.is_front ]
+#		front_planets.extend([ planet for planet in self.attacked_planets.keys() if planet.is_front ])
+#		
+#		if len(front_planets) == 0:
+#			return
+#		
+#		front_planets = sorted(
+#			front_planets,
+#			reverse=True,
+#			key=lambda planet: planet.danger_coefficient()
+#		)
+#		log.debug('front_planets: %s' % front_planets)
+#		sources_per_front = int(math.ceil((len(self.universe.my_planets) - len(front_planets)) / float(len(front_planets))))
+#		used_sources = []
+#		
+#		for front_planet in front_planets:
+#			self.universe.begin_transaction()
+#			
+#			best_sources = Planets(front_planet.best_sources()) - Planets(front_planets)
+#			i = 0
+#			for source in best_sources:
+#				if source not in used_sources:
+#					source.queue_fleet(source.my_frontier_planet2(front_planet), source.available_ship_count(with_danger=False))
+#					used_sources.append(source)
+#					i += 1
+#				if i >= sources_per_front:
+#					break
+#		
+#			self.universe.commit_transaction()
 
-#		self.universe.begin_transaction()
-#		
-#		for planet in self.universe.my_planets:
-#			frontier_planet = planet.my_frontier_planet
-#			if frontier_planet and planet.available_ship_count() > 0:
-#				planet.queue_fleet(frontier_planet, planet.available_ship_count())
-#		
-#		self.universe.commit_transaction()
+		self.universe.begin_transaction()
+		
+		for planet in self.universe.my_planets:
+			frontier_planet = planet.my_frontier_planet
+			if frontier_planet and planet.available_ship_count() > 0:
+				planet.queue_fleet(frontier_planet, planet.available_ship_count(with_danger=False))
+		
+		self.universe.commit_transaction()
 				
 
 Game(MyBot, universe_class=MyUniverse, planet_class=MyPlanet)

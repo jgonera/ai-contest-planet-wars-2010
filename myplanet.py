@@ -287,7 +287,7 @@ class MyPlanet(Planet):
 		
 		return closest
 	
-	def my_frontier_planet(self, destination):
+	def my_frontier_planet2(self, destination):
 		closest_planets = sorted(
 			self.universe.my_planets,
 			key=lambda planet: planet.distance(self)
@@ -299,10 +299,30 @@ class MyPlanet(Planet):
 				return planet
 		
 		return destination
+
+	@property
+	def my_frontier_planet(self):
+		closest_planets = sorted(
+			self.universe.my_planets,
+			key=lambda planet: planet.distance(self)
+		)
+
+		for planet in closest_planets:
+			if planet.enemy_nearest_planet_distance < self.enemy_nearest_planet_distance and \
+			planet.danger_coefficient() >= self.danger_coefficient():
+				log.debug("%s frontier planet: %s (%d vs %d)" % (self, planet, self.enemy_nearest_planet_distance, planet.enemy_nearest_planet_distance))
+				return planet
+
+		return None
+
 	
 	@property
 	def is_front(self):
-		return self.enemy_nearest_planet_distance <= self.my_nearest_planet_distance or self.danger_coefficient() > 0
+		return (
+			self.distance(self.universe.my_center()) >= self.distance(self.universe.enemy_center()) or
+			self.enemy_nearest_planet_distance <= self.my_nearest_planet_distance or
+			self.danger_coefficient() > 0
+		)
 	
 	def queue_fleet(self, target, ship_count):
 		if isinstance(target, set):
